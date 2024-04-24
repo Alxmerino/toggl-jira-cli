@@ -1,0 +1,8 @@
+# Dot files
+.idea
+.env
+
+# Directories
+node_modules
+
+
