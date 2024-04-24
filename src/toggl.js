@@ -50,7 +50,6 @@ export const getTodayEntries = async (date) => {
     } else {
         const resolveDate = resolveDateArg(date);
         params.since = midnightUnix(resolveDate);
-        console.log('PRAMS', {params, date, resolveDate})
     }
 
 
