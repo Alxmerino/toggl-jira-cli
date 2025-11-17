@@ -69,15 +69,21 @@ export function resolveDateArg(date) {
             resolvedDate = subDays(resolvedDate, 1);
             break;
         default:
+            const regexDateMatch = date.match(/^(\d{1,4})-(\d{1,2})-(\d{2})$/);
             // YYYY-MM-DD
-            const year = resolvedDate.getFullYear();
-            resolvedDate = new UTCDate(year + '-' + date);
+            if (regexDateMatch) {
+                resolvedDate = new UTCDate(regexDateMatch[0]);
+            } else {
+                const year = resolvedDate.getFullYear();
+                resolvedDate = new UTCDate(year + '-' + date);
+            }
             break
     }
 
     resolvedDate.setHours(0);
     resolvedDate.setMinutes(0);
     resolvedDate.setSeconds(0);
+
 
     return resolvedDate;
 }
@@ -87,8 +93,16 @@ export function humanReadableDate(date) {
 }
 
 export const header = [
+    // {
+    //     value: 'project_name',
+    //     alias: 'Project',
+    //     headerColor: 'cyan',
+    //     color: 'white',
+    //     align: 'left',
+    //     width: '15%'
+    // },
     {
-        value: 'project_name',
+        value: 'tag',
         alias: 'Issue',
         headerColor: 'cyan',
         color: 'white',
@@ -118,6 +132,7 @@ export const header = [
 export const footer = [
     'Total',
     '',
+    // '',
     function (cellValue, columnIndex, rowIndex, rowData) {
         const total = rowData.reduce((prev, curr) => {
             return prev + curr[2]

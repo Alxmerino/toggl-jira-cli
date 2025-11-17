@@ -16,7 +16,7 @@ const jiraClient = async (url = '/', settings = {}) => {
         body = settings.body
     }
 
-    console.log(`🌐 [JIRA]  ${METHOD === 'POST' ? 'Posting' : 'Fetching'}:`, `\x1b[32m${URL}\x1b[0m`)
+    // console.log(`🌐 [JIRA]  ${METHOD === 'POST' ? 'Posting' : 'Fetching'}:`, `\x1b[32m${URL}\x1b[0m`)
 
     return fetch(URL, {
         method: METHOD,

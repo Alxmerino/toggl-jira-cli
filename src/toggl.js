@@ -42,17 +42,20 @@ export const getProject = async (workspaceId, projectId) => {
 
 export const getTodayEntries = async (date) => {
     const params = {};
+    let displayDate = 'today';
 
     if (date === 'today') {
         params.since = midnightUnix();
+        displayDate = 'today';
     } else if (date === 'yesterday') {
         params.since = midnightUnix(subDays(new Date(), 1));
+        displayDate = 'yesterday';
     } else {
         const resolveDate = resolveDateArg(date);
         params.since = midnightUnix(resolveDate);
+        displayDate = date;
     }
 
-
-    console.log('📝 [TOGGL]', `\x1b[32mGetting Entries for today\x1b[0m`)
+    console.log('📝 [TOGGL]', `\x1b[32mGetting Entries for ${displayDate}\x1b[0m`)
     return toggleClient('/me/time_entries', {params});
 }
