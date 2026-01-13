@@ -31,8 +31,14 @@ import {postIssueWorklog} from './jira.js';
         return acc;
     }, {});
 
+    // Sort grouped entries by issue key
+    const sortedGroupedEntries = Object.keys(groupedEntries).sort().reduce((obj, key) => {
+        obj[key] = groupedEntries[key];
+        return obj;
+    }, {});
+
     // Get the duration of all the entries for the same tag group
-    const totalDurationByTag = Object.entries(groupedEntries).map(([tag, entries]) => {
+    const totalDurationByTag = Object.entries(sortedGroupedEntries).map(([tag, entries]) => {
         const totalDuration = entries.reduce((sum, entry) => sum + entry.duration, 0);
         return {
             tag,
@@ -69,11 +75,9 @@ import {postIssueWorklog} from './jira.js';
     // // console.log(combinedEntries)
 
 
-
-    // Loop through all entries and log the time to JIRA
     // for (let entry of totalDurationByTag) {
     //     const project = await getProject(workspace.id, entry.project_id);
-    //
+    
     //     if (project) {
     //         entry.project_name = project.name
     //     }
@@ -83,6 +87,12 @@ import {postIssueWorklog} from './jira.js';
     const timeEntriesTable = Table(header, totalDurationByTag, footer, {width: 100, compact: true}).render();
     console.log(timeEntriesTable)
 
+    // Check if JIRA integration is enabled
+    const includeJira = process.env.TOGGL_USE_JIRA?.toLowerCase() === 'yes';
+    
+    if (!includeJira) {
+        process.exit(0);
+    }
 
     const logTime = await confirm({
         message: `Do you want to log the time above to JIRA for \x1b[32m${resolvedDate}\x1b[0m?`,

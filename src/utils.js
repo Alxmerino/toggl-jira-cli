@@ -110,14 +110,6 @@ export const header = [
         width: '15%'
     },
     {
-        value: 'description',
-        align: 'left',
-        alias: 'Description',
-        width: '60%',
-        headerColor: 'white',
-        color: 'white',
-    },
-    {
         value: 'duration',
         alias: 'Time Worked',
         align: 'left',
@@ -126,18 +118,25 @@ export const header = [
         formatter: function (value) {
             return humanTime(roundDuration(value));
         }
+    },
+    {
+        value: 'description',
+        align: 'left',
+        alias: 'Description',
+        width: '60%',
+        headerColor: 'white',
+        color: 'white',
     }
 ]
 
 export const footer = [
-    'Total',
-    '',
-    // '',
+    'Total:',
     function (cellValue, columnIndex, rowIndex, rowData) {
         const total = rowData.reduce((prev, curr) => {
-            return prev + curr[2]
+            return prev + curr[1]
         }, 0)
 
         return this.style(`${humanTime(roundDuration(total))}`, "italic")
-    }
+    },
+    ''
 ]
