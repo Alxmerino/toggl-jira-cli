@@ -1,5 +1,4 @@
-import { UTCDate } from "@date-fns/utc";
-import {format, subDays} from "date-fns";
+import {addDays, format, parseISO, startOfDay, subDays} from "date-fns";
 
 export function humanTime(seconds) {
     const levels = [
@@ -18,8 +17,9 @@ export function humanTime(seconds) {
     return returnText.trim();
 }
 
-export function formatTime(timeString) {
-    return timeString.split('+')[0];
+// Everhour dates a time record by calendar day: 2026-09-02
+export function toApiDate(date) {
+    return format(date, 'yyyy-MM-dd');
 }
 
 export function roundDuration(durationInSeconds, nearestMinutes = 5) {
@@ -34,14 +34,9 @@ export function roundDuration(durationInSeconds, nearestMinutes = 5) {
 }
 
 export const midnightUnix = (date) => {
-    // Get current date
-    const currentDate = date ?? new Date();
-
-    // Set time to midnight
-    currentDate.setHours(0, 0, 0, 0);
-
-    // Get timestamp in seconds
-    return Math.floor(currentDate.getTime() / 1000);
+    const d = date ? new Date(date) : new Date();
+    d.setHours(0, 0, 0, 0);
+    return Math.floor(d.getTime() / 1000);
 }
 
 export const logError = (response) => {
@@ -60,7 +55,7 @@ export const getQueryParams = (params) => {
 }
 
 export function resolveDateArg(date) {
-    let resolvedDate = new UTCDate();
+    let resolvedDate = new Date();
 
     switch (date) {
         case 'today':
@@ -69,17 +64,41 @@ export function resolveDateArg(date) {
             resolvedDate = subDays(resolvedDate, 1);
             break;
         default:
-            // YYYY-MM-DD
-            const year = resolvedDate.getFullYear();
-            resolvedDate = new UTCDate(year + '-' + date);
+            const regexDateMatch = date.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+            if (regexDateMatch) {
+                const m = parseInt(regexDateMatch[2], 10);
+                const d = parseInt(regexDateMatch[3], 10);
+                if (m < 1 || m > 12 || d < 1 || d > 31) {
+                    throw new Error(`Invalid date: ${date}`);
+                }
+                resolvedDate = parseISO(regexDateMatch[0]);
+            } else {
+                const year = resolvedDate.getFullYear();
+                resolvedDate = parseISO(year + '-' + date);
+            }
             break
     }
 
-    resolvedDate.setHours(0);
-    resolvedDate.setMinutes(0);
-    resolvedDate.setSeconds(0);
+    if (isNaN(resolvedDate.getTime())) {
+        throw new Error(`Invalid date: ${date}`);
+    }
 
-    return resolvedDate;
+    // Days are the user's local calendar days, not UTC days.
+    return startOfDay(resolvedDate);
+}
+
+// Local-day window as offset-aware RFC3339, so Toggl slices on the same day the user sees.
+export function localDayRange(date) {
+    const start = resolveDateArg(date);
+    return {
+        start_date: format(start, "yyyy-MM-dd'T'HH:mm:ssxxx"),
+        end_date: format(addDays(start, 1), "yyyy-MM-dd'T'HH:mm:ssxxx")
+    };
+}
+
+// Two instants land on the same day only from the user's local point of view.
+export function isSameLocalDay(isoString, date) {
+    return format(parseISO(isoString), 'yyyy-MM-dd') === format(date, 'yyyy-MM-dd');
 }
 
 export function humanReadableDate(date) {
@@ -87,19 +106,38 @@ export function humanReadableDate(date) {
 }
 
 export const header = [
+    // {
+    //     value: 'project_name',
+    //     alias: 'Project',
+    //     headerColor: 'cyan',
+    //     color: 'white',
+    //     align: 'left',
+    //     width: '15%'
+    // },
     {
-        value: 'project_name',
+        value: 'tag',
         alias: 'Issue',
         headerColor: 'cyan',
         color: 'white',
         align: 'left',
-        width: '15%'
+        width: '13%'
+    },
+    {
+        value: 'started',
+        alias: 'Started',
+        headerColor: 'cyan',
+        color: 'white',
+        align: 'left',
+        width: '16%',
+        formatter: function (value) {
+            return format(parseISO(value), 'MMM d, h:mm a');
+        }
     },
     {
         value: 'description',
         align: 'left',
         alias: 'Description',
-        width: '60%',
+        width: '39%',
         headerColor: 'white',
         color: 'white',
     },
@@ -108,9 +146,19 @@ export const header = [
         alias: 'Time Worked',
         align: 'left',
         color: 'red',
-        width: '25%',
+        width: '17%',
         formatter: function (value) {
             return humanTime(roundDuration(value));
+        }
+    },
+    {
+        value: 'alreadyLogged',
+        alias: 'In Everhour',
+        align: 'left',
+        headerColor: 'cyan',
+        width: '17%',
+        formatter: function (value) {
+            return value > 0 ? humanTime(value) : '—';
         }
     }
 ]
@@ -118,11 +166,14 @@ export const header = [
 export const footer = [
     'Total',
     '',
+    '',
+    // Column 3 is "Time Worked"; the trailing '' keeps "In Everhour" blank.
     function (cellValue, columnIndex, rowIndex, rowData) {
         const total = rowData.reduce((prev, curr) => {
-            return prev + curr[2]
+            return prev + curr[3]
         }, 0)
 
         return this.style(`${humanTime(roundDuration(total))}`, "italic")
-    }
+    },
+    ''
 ]
