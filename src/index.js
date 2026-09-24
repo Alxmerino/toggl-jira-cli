@@ -21,10 +21,11 @@ const handleFatal = (error) => {
 };
 
 (async function () {
-    // `log` opens the web page (edit hours and comments) instead of the checkbox flow; any other arg is the date
+    // `toggl [date]` only reports. `toggl log [date]` pushes to Everhour: the web page by default, the checkbox flow with --cli
     const args = process.argv.slice(2);
-    const openWeb = args.includes('log');
-    let logDate = args.find(arg => arg !== 'log') ?? (openWeb ? 'today' : undefined);
+    const push = args.includes('log');
+    const openWeb = push && !args.includes('--cli');
+    const logDate = args.find(arg => arg !== 'log' && !arg.startsWith('--')) ?? 'today';
 
     if (!process.env.EVERHOUR_API_KEY) {
         const profileUrl = 'https://app.everhour.com/#/account/profile';
@@ -37,24 +38,11 @@ const handleFatal = (error) => {
         console.log('💡 Add \x1b[32mexport EVERHOUR_API_KEY=<key>\x1b[0m to your shell profile to skip this next time.\n');
     }
 
-    if (!logDate) {
-        const logToday = await confirm({message: 'Log today\'s time?'});
-        if (!logToday) {
-            const logYesterday = await confirm({message: 'Log yesterday\'s time?'});
-            if (!logYesterday) {
-                return;
-            }
-            logDate = 'yesterday';
-        } else {
-            logDate = 'today';
-        }
-    }
-
     let totalTimeWorked = 0;
     let totalTimeLogged = 0;
     const logDay = resolveDateArg(logDate);
     const resolvedDate = humanReadableDate(logDay);
-    console.log(`Logging time entries for \x1b[32m${resolvedDate}\x1b[0m`);
+    console.log(`${push ? 'Logging time entries' : 'Time entries'} for \x1b[32m${resolvedDate}\x1b[0m`);
 
     let entries = await getTodayEntries(logDate);
     entries = Array.isArray(entries) ? entries : [];
@@ -128,12 +116,16 @@ const handleFatal = (error) => {
     }
 
     for (const tag of unresolved) {
-        console.log('❓ [SKIP]  ', `\x1b[33m${tag} has no matching Everhour task${openWeb ? '; pick one on the page' : ''}\x1b[0m`);
+        console.log(push ? '❓ [SKIP]  ' : '❓ [NO TASK]', `\x1b[33m${tag} has no matching Everhour task${openWeb ? '; pick one on the page' : ''}\x1b[0m`);
     }
 
     const timeEntriesTable = Table(header, totalDurationByTag, footer, {width: 120, compact: true}).render();
     console.log(timeEntriesTable);
     console.log(`   Tickets worked on: \x1b[92m${totalDurationByTag.length}\x1b[0m\n`);
+
+    if (!push) {
+        return;
+    }
 
     if (openWeb) {
         return startWeb(apiDate, totalDurationByTag);
