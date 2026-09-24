@@ -10,8 +10,10 @@
   "license": "ISC",
   "dependencies": {
     "@date-fns/utc": "^1.2.0",
-    "@inquirer/confirm": "^3.1.1",
+    "@inquirer/checkbox": "^5.2.4",
+    "@inquirer/confirm": "^5.1.21",
     "date-fns": "^3.6.0",
+    "dotenv": "^17.4.2",
     "tty-table": "^4.2.3"
   },
   "type": "module"
