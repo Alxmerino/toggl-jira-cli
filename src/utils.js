@@ -18,6 +18,11 @@ export function humanTime(seconds) {
     return returnText.trim();
 }
 
+export function decimalTime(seconds) {
+    const hours = seconds / 3600;
+    return hours.toFixed(2);
+}
+
 export function formatTime(timeString) {
     return timeString.split('+')[0];
 }
@@ -80,9 +85,10 @@ export function resolveDateArg(date) {
             break
     }
 
-    resolvedDate.setHours(0);
-    resolvedDate.setMinutes(0);
-    resolvedDate.setSeconds(0);
+    // Use UTC methods to ensure consistent midnight across timezones
+    resolvedDate.setUTCHours(0);
+    resolvedDate.setUTCMinutes(0);
+    resolvedDate.setUTCSeconds(0);
 
 
     return resolvedDate;
@@ -111,10 +117,20 @@ export const header = [
     },
     {
         value: 'duration',
+        alias: 'Decimal',
+        align: 'left',
+        color: 'yellow',
+        width: '10%',
+        formatter: function (value) {
+            return decimalTime(roundDuration(value));
+        }
+    },
+    {
+        value: 'duration',
         alias: 'Time Worked',
         align: 'left',
         color: 'red',
-        width: '25%',
+        width: '20%',
         formatter: function (value) {
             return humanTime(roundDuration(value));
         }
@@ -123,7 +139,7 @@ export const header = [
         value: 'description',
         align: 'left',
         alias: 'Description',
-        width: '60%',
+        width: '55%',
         headerColor: 'white',
         color: 'white',
     }
@@ -131,6 +147,13 @@ export const header = [
 
 export const footer = [
     'Total:',
+    function (cellValue, columnIndex, rowIndex, rowData) {
+        const total = rowData.reduce((prev, curr) => {
+            return prev + curr[1]
+        }, 0)
+
+        return this.style(`${decimalTime(roundDuration(total))}`, "italic")
+    },
     function (cellValue, columnIndex, rowIndex, rowData) {
         const total = rowData.reduce((prev, curr) => {
             return prev + curr[1]

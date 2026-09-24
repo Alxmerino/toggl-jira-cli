@@ -20,14 +20,33 @@ import {postIssueWorklog} from './jira.js';
     // Get today's entries
     let entries = await getTodayEntries(logDate);
 
-    // Group entries by project ID
-    const groupedEntries = entries.reduce((acc, obj) => {
-        const key = obj.tags && obj.tags.length > 0 ? obj.tags[0] : 'no-tags';
-
-        if (!acc[key]) {
-            acc[key] = [];
+    // Fetch project names for all unique project IDs
+    const uniqueProjectIds = [...new Set(entries.map(e => e.project_id).filter(Boolean))];
+    const projectMap = {};
+    for (const projectId of uniqueProjectIds) {
+        const project = await getProject(workspace.id, projectId);
+        if (project) {
+            projectMap[projectId] = project.name;
         }
-        acc[key].push(obj);
+    }
+
+    // Add project_name to each entry
+    entries = entries.map(entry => ({
+        ...entry,
+        project_name: projectMap[entry.project_id] || 'No Project'
+    }));
+
+    // Group entries by tag (only Billable entries for the table)
+    const billableEntries = entries.filter(entry => entry.project_name === 'Billable');
+    const groupedEntries = billableEntries.reduce((acc, obj) => {
+        const keys = obj.tags && obj.tags.length > 0 ? obj.tags : ['no-tags'];
+
+        for (const key of keys) {
+            if (!acc[key]) {
+                acc[key] = [];
+            }
+            acc[key].push(obj);
+        }
         return acc;
     }, {});
 
@@ -86,6 +105,29 @@ import {postIssueWorklog} from './jira.js';
     // Show all entries in a table
     const timeEntriesTable = Table(header, totalDurationByTag, footer, {width: 100, compact: true}).render();
     console.log(timeEntriesTable)
+
+    // Calculate and display hours by project
+    const hoursByProject = entries.reduce((acc, entry) => {
+        const projectName = entry.project_name || 'No Project';
+        if (!acc[projectName]) {
+            acc[projectName] = 0;
+        }
+        if (entry.duration > 0) {
+            acc[projectName] += entry.duration;
+        }
+        return acc;
+    }, {});
+
+    console.log('\n📊 Hours by Project:');
+    let grandTotal = 0;
+    Object.entries(hoursByProject).sort().forEach(([project, duration]) => {
+        const roundedDuration = roundDuration(duration);
+        grandTotal += roundedDuration;
+        console.log(`   ${project}: \x1b[93m${humanTime(roundedDuration)}\x1b[0m`);
+    });
+    console.log(`   ─────────────────`);
+    console.log(`   Total: \x1b[92m${humanTime(grandTotal)}\x1b[0m`);
+    console.log(`   Tickets worked on: \x1b[92m${totalDurationByTag.length}\x1b[0m\n`);
 
     // Check if JIRA integration is enabled
     const includeJira = process.env.TOGGL_USE_JIRA?.toLowerCase() === 'yes';
