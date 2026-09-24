@@ -95,14 +95,6 @@ export function humanReadableDate(date) {
 }
 
 export const header = [
-    // {
-    //     value: 'project_name',
-    //     alias: 'Project',
-    //     headerColor: 'cyan',
-    //     color: 'white',
-    //     align: 'left',
-    //     width: '15%'
-    // },
     {
         value: 'tag',
         alias: 'Issue',
@@ -112,23 +104,14 @@ export const header = [
         width: '13%'
     },
     {
-        value: 'started',
-        alias: 'Started',
-        headerColor: 'cyan',
-        color: 'white',
+        value: 'duration',
+        alias: 'Decimal',
         align: 'left',
-        width: '16%',
+        color: 'yellow',
+        width: '10%',
         formatter: function (value) {
-            return format(parseISO(value), 'MMM d, h:mm a');
+            return decimalTime(roundDuration(value));
         }
-    },
-    {
-        value: 'description',
-        align: 'left',
-        alias: 'Description',
-        width: '39%',
-        headerColor: 'white',
-        color: 'white',
     },
     {
         value: 'duration',
@@ -139,6 +122,14 @@ export const header = [
         formatter: function (value) {
             return humanTime(roundDuration(value));
         }
+    },
+    {
+        value: 'description',
+        align: 'left',
+        alias: 'Description',
+        width: '43%',
+        headerColor: 'white',
+        color: 'white',
     },
     {
         value: 'alreadyLogged',
@@ -152,17 +143,17 @@ export const header = [
     }
 ]
 
-export const footer = [
-    'Total',
-    '',
-    '',
-    // Column 3 is "Time Worked"; the trailing '' keeps "In Everhour" blank.
-    function (cellValue, columnIndex, rowIndex, rowData) {
-        const total = rowData.reduce((prev, curr) => {
-            return prev + curr[3]
-        }, 0)
+// Columns 1 and 2 are Decimal and Time Worked (both raw durations); the trailing '' entries keep Description and In Everhour blank
+const totalDuration = (rowData, column) => rowData.reduce((sum, row) => sum + row[column], 0);
 
-        return this.style(`${humanTime(roundDuration(total))}`, "italic")
+export const footer = [
+    'Total:',
+    function (cellValue, columnIndex, rowIndex, rowData) {
+        return this.style(`${decimalTime(roundDuration(totalDuration(rowData, 1)))}`, "italic")
     },
+    function (cellValue, columnIndex, rowIndex, rowData) {
+        return this.style(`${humanTime(roundDuration(totalDuration(rowData, 2)))}`, "italic")
+    },
+    '',
     ''
 ]

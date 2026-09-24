@@ -92,12 +92,8 @@ const handleFatal = (error) => {
     const totalDurationByTag = Object.entries(groupedEntries).map(([tag, tagEntries]) => {
         const totalDuration = tagEntries.reduce((sum, entry) => sum + entry.duration, 0);
         const descriptions = [...new Set(tagEntries.map(e => e.description).filter(Boolean))];
-        const earliestStart = tagEntries.reduce((earliest, current) => {
-            return current.start < earliest.start ? current : earliest;
-        }).start;
         return {
             tag,
-            started: earliestStart,
             duration: totalDuration,
             description: descriptions.join(', ') || 'No description',
             entries: tagEntries.map(entry => ({
@@ -137,6 +133,7 @@ const handleFatal = (error) => {
 
     const timeEntriesTable = Table(header, totalDurationByTag, footer, {width: 120, compact: true}).render();
     console.log(timeEntriesTable);
+    console.log(`   Tickets worked on: \x1b[92m${totalDurationByTag.length}\x1b[0m\n`);
 
     if (openWeb) {
         return startWeb(apiDate, totalDurationByTag);
