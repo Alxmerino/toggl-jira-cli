@@ -14,7 +14,7 @@
     "@inquirer/confirm": "^5.1.21",
     "date-fns": "^3.6.0",
     "dotenv": "^17.4.2",
-    "tty-table": "^4.2.3"
+    "tty-table": "^7.0.1"
   },
   "type": "module"
 }
