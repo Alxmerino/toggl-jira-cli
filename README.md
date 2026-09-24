@@ -1,26 +1,45 @@
-# Toggl to JIRA CLI
+# Toggl to Everhour CLI
 
-CLI tool to log my time from Toggl to JIRA
+CLI tool to log my time from Toggl to Everhour
 
 ## Prerequisite
 This is tested and working on NodeJS 20.x
 
+## Setup
+Copy `.env.example` to `.env` and fill in:
+
+- `TOGGL_TOKEN` — Toggl profile page, API token
+- `EVERHOUR_API_KEY` — Everhour profile page, bottom. If it is not set, the CLI
+  opens that page and asks you to paste the key for the run.
+- `TOGGL_PROJECTS` (optional) — comma-separated Toggl project names, e.g.
+  `Billable`. When set, only entries in those projects count. Leave it unset to
+  count everything.
+
+Toggl entries are matched to Everhour tasks by their first tag, which must be
+the Jira issue key (e.g. `NSFW-2054`). Untagged entries are skipped.
+
 ## Usage
-Run `node --env-file=.env ./src/index.js` to show today's time. It also accepts a date argument such as `today`, `yesterday`, `YYYY-MM-DD` or `MM-DD`.
+Run `node --env-file=.env ./src/index.js` to log today's time. It also accepts a
+date argument such as `today`, `yesterday`, `YYYY-MM-DD` or `MM-DD`.
 
-Add `log` (e.g. `./src/index.js log` or `./src/index.js log yesterday`) to open a local page after the summary where you adjust hours and add a comment per issue, then log each one to Everhour. Requires `EVERHOUR_TOKEN`.
+Time is grouped by tag, and you pick which entries to log before anything is
+sent. Time already recorded in Everhour for that day is subtracted, so a rerun
+tops up rather than double-logging.
 
-## Environment Variables
+### Web page (`log`)
+Add `log` (e.g. `./src/index.js log` or `./src/index.js log yesterday`) to open a
+local page after the summary instead of the checkbox prompt. Each issue gets an
+editable hours field and a comment, logged to Everhour one row at a time or all
+at once.
 
-### Required
-- `TOGGL_TOKEN` – Toggl API token for authentication
-
-### Optional
-- `EVERHOUR_TOKEN`: Everhour API key (bottom of https://app.everhour.com/#/account/profile). Used by the `log` command. If it is not set, `log` opens your Everhour profile and asks you to paste the key for that run. Issues match Everhour tasks by Jira key. Re-running for the same date updates the existing Everhour record, so time is not doubled. Issues with no matching Everhour task get a search box; the task you pick is saved in `.everhour-mappings.json` and used for that tag from then on. Found tasks are cached in `.everhour-tasks.json` (safe to delete). The Jira prompt is skipped when `log` is used.
-- `TOGGL_USE_JIRA` – Set to `yes` to enable JIRA syncing. If not set or any other value, JIRA prompt will be skipped.
-- `JIRA_USER` – JIRA username for Basic Auth (required if `TOGGL_USE_JIRA=yes`)
-- `JIRA_PASSWORD` – JIRA password for Basic Auth (required if `TOGGL_USE_JIRA=yes`)
-- `JIRA_API_URL` – JIRA API base URL (required if `TOGGL_USE_JIRA=yes`)
+- Hours on the page are the day's total for that task. Saving again updates the
+  Everhour record instead of adding another, so a rerun never doubles time.
+- Issues with no matching Everhour task get a search box. The task you pick is
+  saved in `.everhour-mappings.json` and used for that tag from then on, by both
+  the page and the checkbox flow.
+- Found tasks are cached in `.everhour-tasks.json`; search only asks Everhour
+  when nothing cached matches. The file is safe to delete.
+- The CLI shuts down a few seconds after the last tab closes.
 
 ## Aliasing
 In your `.zshrc` add an alias such as `log-time` so this command runs from anywhere 

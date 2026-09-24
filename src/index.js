@@ -1,198 +1,218 @@
+import 'dotenv/config';
 import confirm from '@inquirer/confirm';
+import checkbox from '@inquirer/checkbox';
 import Table from 'tty-table';
-import {format, subDays} from "date-fns";
-import {header, footer, humanTime, formatTime, roundDuration, resolveDateArg, humanReadableDate} from './utils.js';
+import {header, footer, humanTime, toApiDate, roundDuration, resolveDateArg, humanReadableDate} from './utils.js';
 import {getTodayEntries, getProject, getWorkspaces} from './toggl.js';
-import {postIssueWorklog} from './jira.js';
+import {postTime, getCurrentUser, getLoggedSecondsByTask, resolveTask} from './everhour.js';
 import {startWeb} from './web.js';
 import {createInterface} from 'node:readline/promises';
 import {execFile} from 'node:child_process';
 
+// Ctrl+C at a prompt should read as "cancelled", not as a stack trace.
+const handleFatal = (error) => {
+    // Two @inquirer/core copies are installed, so instanceof is unreliable here.
+    if (error && (error.name === 'ExitPromptError' || error.constructor?.name === 'ExitPromptError')) {
+        console.log('\n🛑', `\x1b[33mCancelled. Nothing logged.\x1b[0m`);
+        process.exit(0);
+    }
+    console.error('💥', error && error.message ? error.message : error);
+    process.exit(1);
+};
+
 (async function () {
-    // `log` opens the Everhour web UI after the summary; any other arg is the date
+    // `log` opens the web page (edit hours and comments) instead of the checkbox flow; any other arg is the date
     const args = process.argv.slice(2);
     const openWeb = args.includes('log');
-    const [logDate = 'today'] = args.filter(arg => arg !== 'log');
+    let logDate = args.find(arg => arg !== 'log') ?? (openWeb ? 'today' : undefined);
 
-    if (openWeb && !process.env.EVERHOUR_TOKEN) {
+    if (!process.env.EVERHOUR_API_KEY) {
         const profileUrl = 'https://app.everhour.com/#/account/profile';
-        console.log(`🔑 \x1b[93mEVERHOUR_TOKEN is not set.\x1b[0m Opening ${profileUrl}; the API key is at the bottom of the page.`);
+        console.log(`🔑 \x1b[93mEVERHOUR_API_KEY is not set.\x1b[0m Opening ${profileUrl}; the API key is at the bottom of the page.`);
         execFile('open', [profileUrl]);
         const rl = createInterface({input: process.stdin, output: process.stdout});
-        process.env.EVERHOUR_TOKEN = (await rl.question('Paste your Everhour API key (Enter to cancel): ')).trim();
+        process.env.EVERHOUR_API_KEY = (await rl.question('Paste your Everhour API key (Enter to cancel): ')).trim();
         rl.close();
-        if (!process.env.EVERHOUR_TOKEN) process.exit(1);
-        console.log('💡 Add \x1b[32mexport EVERHOUR_TOKEN=<key>\x1b[0m to your shell profile to skip this next time.\n');
+        if (!process.env.EVERHOUR_API_KEY) process.exit(1);
+        console.log('💡 Add \x1b[32mexport EVERHOUR_API_KEY=<key>\x1b[0m to your shell profile to skip this next time.\n');
+    }
+
+    if (!logDate) {
+        const logToday = await confirm({message: 'Log today\'s time?'});
+        if (!logToday) {
+            const logYesterday = await confirm({message: 'Log yesterday\'s time?'});
+            if (!logYesterday) {
+                return;
+            }
+            logDate = 'yesterday';
+        } else {
+            logDate = 'today';
+        }
     }
 
     let totalTimeWorked = 0;
     let totalTimeLogged = 0;
-    const resolvedDate = humanReadableDate(resolveDateArg(logDate));
-    console.log(`Logging time entries for \x1b[32m${resolvedDate}\x1b[0m`)
+    const logDay = resolveDateArg(logDate);
+    const resolvedDate = humanReadableDate(logDay);
+    console.log(`Logging time entries for \x1b[32m${resolvedDate}\x1b[0m`);
 
-    const [workspace] = await getWorkspaces();
-    // Get today's entries
     let entries = await getTodayEntries(logDate);
+    entries = Array.isArray(entries) ? entries : [];
 
-    // Fetch project names for all unique project IDs
-    const uniqueProjectIds = [...new Set(entries.map(e => e.project_id).filter(Boolean))];
-    const projectMap = {};
-    for (const projectId of uniqueProjectIds) {
-        const project = await getProject(workspace.id, projectId);
-        if (project) {
-            projectMap[projectId] = project.name;
+    // Optional per-person filter, e.g. TOGGL_PROJECTS=Billable when non-billable time is tracked in Toggl too
+    const onlyProjects = (process.env.TOGGL_PROJECTS || '').split(',').map(name => name.trim()).filter(Boolean);
+    if (onlyProjects.length > 0) {
+        const [workspace] = await getWorkspaces();
+        const projectIds = [...new Set(entries.map(entry => entry.project_id).filter(Boolean))];
+        // Sequential, as before: Toggl rate-limits bursts
+        const projects = [];
+        for (const id of projectIds) {
+            projects.push(await getProject(workspace.id, id));
+        }
+        const keep = new Set(projects.filter(p => p && onlyProjects.includes(p.name)).map(p => p.id));
+        const skipped = entries.filter(entry => !keep.has(entry.project_id)).length;
+        entries = entries.filter(entry => keep.has(entry.project_id));
+        if (skipped > 0) {
+            console.log(`ℹ️  [INFO]  ${skipped} entr${skipped === 1 ? 'y' : 'ies'} outside ${onlyProjects.join(', ')} left out`);
         }
     }
 
-    // Add project_name to each entry
-    entries = entries.map(entry => ({
-        ...entry,
-        project_name: projectMap[entry.project_id] || 'No Project'
-    }));
-
-    // Group entries by tag (only Billable entries for the table)
-    const billableEntries = entries.filter(entry => entry.project_name === 'Billable');
-    const groupedEntries = billableEntries.reduce((acc, obj) => {
-        const keys = obj.tags && obj.tags.length > 0 ? obj.tags : ['no-tags'];
-
-        for (const key of keys) {
-            if (!acc[key]) {
-                acc[key] = [];
-            }
-            acc[key].push(obj);
-        }
+    const groupedEntries = entries.reduce((acc, obj) => {
+        const key = obj.tags && obj.tags.length > 0 ? obj.tags[0] : 'no-tags';
+        if (!acc[key]) acc[key] = [];
+        acc[key].push(obj);
         return acc;
     }, {});
 
-    // Sort grouped entries by issue key
-    const sortedGroupedEntries = Object.keys(groupedEntries).sort().reduce((obj, key) => {
-        obj[key] = groupedEntries[key];
-        return obj;
-    }, {});
+    const untaggedCount = (groupedEntries['no-tags'] || []).length;
+    if (untaggedCount > 0) {
+        console.log(`⚠️  [WARN]  ${untaggedCount} entr${untaggedCount === 1 ? 'y' : 'ies'} skipped — no issue tag`);
+    }
 
-    // Get the duration of all the entries for the same tag group
-    const totalDurationByTag = Object.entries(sortedGroupedEntries).map(([tag, entries]) => {
-        const totalDuration = entries.reduce((sum, entry) => sum + entry.duration, 0);
+    const totalDurationByTag = Object.entries(groupedEntries).map(([tag, tagEntries]) => {
+        const totalDuration = tagEntries.reduce((sum, entry) => sum + entry.duration, 0);
+        const descriptions = [...new Set(tagEntries.map(e => e.description).filter(Boolean))];
+        const earliestStart = tagEntries.reduce((earliest, current) => {
+            return current.start < earliest.start ? current : earliest;
+        }).start;
         return {
             tag,
+            started: earliestStart,
             duration: totalDuration,
-            description: entries[0].description || '',
-            entries: entries.map(entry => ({
+            description: descriptions.join(', ') || 'No description',
+            entries: tagEntries.map(entry => ({
                 ...entry,
                 duration: roundDuration(entry.duration)
             }))
         };
-    }).filter(entry => entry.tag && entry.tag !== 'no-tags' && entry.duration > 0);
+    }).filter(entry => entry.tag !== 'no-tags' && entry.duration > 0);
 
-    // console.log('totalDurationByTag', totalDurationByTag)
+    if (totalDurationByTag.length === 0) {
+        console.log('🕗', `\x1b[92mNo entries found. Are you still working?!\x1b[0m`);
+        return;
+    }
 
+    const apiDate = toApiDate(logDay);
 
-    // // Merge objects with the same description
-    // let combinedEntries = Object.values(groupedEntries).map(group => {
-    //     return group.reduce((acc, obj) => {
-    //         Object.keys(obj).forEach(key => {
-    //             if (!acc.hasOwnProperty(key)) {
-    //                 acc[key] = obj[key];
-    //             } else if (Array.isArray(acc[key])) {
-    //                 acc[key] = acc[key].concat(obj[key]);
-    //             // } else if (key === 'description' && acc[key] !== obj[key]) {
-    //             //     console.log(obj)
-    //             } else if (key === 'duration') {
-    //                 acc[key] += obj[key];
-    //             }
-    //         });
-    //         return acc;
-    //     }, {});
-    // });
-    //
-    // // console.log(combinedEntries)
+    // Ask Everhour what it already holds for this day, so a rerun tops up
+    // instead of double-logging. One call covers every task.
+    console.log('🔎 [EVERHOUR]  Checking for time already logged...');
+    const me = await getCurrentUser();
+    const loggedByTask = await getLoggedSecondsByTask(me.id, apiDate);
 
-
-    // for (let entry of totalDurationByTag) {
-    //     const project = await getProject(workspace.id, entry.project_id);
-    
-    //     if (project) {
-    //         entry.project_name = project.name
-    //     }
-    // }
-
-    // Show all entries in a table
-    const timeEntriesTable = Table(header, totalDurationByTag, footer, {width: 100, compact: true}).render();
-    console.log(timeEntriesTable)
-
-    // Calculate and display hours by project
-    const hoursByProject = entries.reduce((acc, entry) => {
-        const projectName = entry.project_name || 'No Project';
-        if (!acc[projectName]) {
-            acc[projectName] = 0;
+    const unresolved = [];
+    for (const entry of totalDurationByTag) {
+        const task = await resolveTask(entry.tag);
+        entry.taskId = task ? task.id : null;
+        entry.alreadyLogged = task ? (loggedByTask.get(task.id) || 0) : 0;
+        entry.remaining = task ? Math.max(0, roundDuration(entry.duration) - entry.alreadyLogged) : 0;
+        if (!task) {
+            unresolved.push(entry.tag);
         }
-        if (entry.duration > 0) {
-            acc[projectName] += entry.duration;
-        }
-        return acc;
-    }, {});
+    }
 
-    console.log('\n📊 Hours by Project:');
-    let grandTotal = 0;
-    Object.entries(hoursByProject).sort().forEach(([project, duration]) => {
-        const roundedDuration = roundDuration(duration);
-        grandTotal += roundedDuration;
-        console.log(`   ${project}: \x1b[93m${humanTime(roundedDuration)}\x1b[0m`);
-    });
-    console.log(`   ─────────────────`);
-    console.log(`   Total: \x1b[92m${humanTime(grandTotal)}\x1b[0m`);
-    console.log(`   Tickets worked on: \x1b[92m${totalDurationByTag.length}\x1b[0m\n`);
+    for (const tag of unresolved) {
+        console.log('❓ [SKIP]  ', `\x1b[33m${tag} has no matching Everhour task${openWeb ? '; pick one on the page' : ''}\x1b[0m`);
+    }
 
-    // Everhour replaces the Jira worklog flow: hand the grouped entries to the local web UI
+    const timeEntriesTable = Table(header, totalDurationByTag, footer, {width: 120, compact: true}).render();
+    console.log(timeEntriesTable);
+
     if (openWeb) {
-        return startWeb(format(resolveDateArg(logDate), 'yyyy-MM-dd'), totalDurationByTag).catch(error => {
-            console.error('🫠 \x1b[31m[EVERHOUR]\x1b[0m', error.message, '(check EVERHOUR_TOKEN)');
-            process.exit(1);
-        });
+        return startWeb(apiDate, totalDurationByTag);
     }
 
-    // Check if JIRA integration is enabled
-    const includeJira = process.env.TOGGL_USE_JIRA?.toLowerCase() === 'yes';
-    
-    if (!includeJira) {
-        process.exit(0);
+    const loggable = totalDurationByTag.filter(entry => entry.taskId && entry.remaining > 0);
+    const settled = totalDurationByTag.filter(entry => entry.taskId && entry.remaining === 0);
+
+    for (const entry of settled) {
+        console.log('✅ [SKIP]  ', `\x1b[90m${entry.tag} already fully logged (${humanTime(entry.alreadyLogged)})\x1b[0m`);
     }
 
-    const logTime = await confirm({
-        message: `Do you want to log the time above to JIRA for \x1b[32m${resolvedDate}\x1b[0m?`,
+    if (loggable.length === 0) {
+        console.log('🎉', `\x1b[92mNothing left to log for ${resolvedDate}.\x1b[0m`);
+        return;
+    }
+
+    const selectedTags = await checkbox({
+        message: `Select entries to log to Everhour on ${resolvedDate}`,
+        choices: loggable.map(entry => ({
+            name: `${entry.tag.padEnd(12)} ${humanTime(entry.remaining).padEnd(16)} ${entry.alreadyLogged > 0 ? `(topping up ${humanTime(entry.alreadyLogged)} already logged) ` : ''}${entry.description}`,
+            value: entry.tag,
+            // Without this the submitted-answer line reprints every full label.
+            short: entry.tag,
+            checked: true
+        })),
+        pageSize: 15
+    });
+
+    const selected = loggable.filter(entry => selectedTags.includes(entry.tag));
+
+    if (selected.length === 0) {
+        console.log('🛑', `\x1b[33mNothing selected. Nothing logged.\x1b[0m`);
+        return;
+    }
+
+    const grandTotal = selected.reduce((sum, e) => sum + e.remaining, 0);
+    const proceed = await confirm({
+        message: `Log ${humanTime(grandTotal)} across ${selected.length} issue${selected.length === 1 ? '' : 's'} to Everhour on ${resolvedDate}?`,
         default: false
     });
-    if (logTime) {
-        for (let entry of totalDurationByTag) {
-            totalTimeWorked += entry.duration;
 
-            console.log('💼 [JIRA]  Logging entry:', `\x1b[93m${entry.tag} \x1b[0m`);
-            console.log('⏱️ [JIRA]  Time worked', `\x1b[93m${humanTime(roundDuration(entry.duration))} \x1b[0m`);
+    if (!proceed) {
+        console.log('🛑', `\x1b[33mNothing logged.\x1b[0m`);
+        return;
+    }
 
-            // @todo: Check if time has already been logged?
-            // const worklog = true;
-            const worklog = await postIssueWorklog(entry.tag, {
+    for (let entry of selected) {
+        totalTimeWorked += entry.remaining;
+
+        console.log('💼 [EVERHOUR]  Logging entry:', `\x1b[93m${entry.tag} \x1b[0m`);
+        console.log('⏱️ [EVERHOUR]  Time worked', `\x1b[93m${humanTime(entry.remaining)} \x1b[0m`);
+
+        try {
+            const record = await postTime({
+                taskId: entry.taskId,
+                date: apiDate,
+                seconds: entry.remaining,
                 comment: entry.description,
-                // for each entry.entries, get the earliest start time
-                started: formatTime(entry.entries.reduce((earliest, current) => {
-                    return current.start < earliest.start ? current : earliest;
-                }).start) + '.0+0000',
-                // started: formatTime(entry.start) + '.0+0000',
-                timeSpentSeconds: roundDuration(entry.duration)
+                userId: me.id
             });
-        //
-            if (worklog) {
-                totalTimeLogged += roundDuration(entry.duration);
-                console.log('🚀 [JIRA]  Time logged successfully');
-            }
-        }
 
-        if (totalTimeWorked > 0 && totalTimeLogged > 0) {
-            console.log('🏁 [SUCCESS] Total Time Worked', `\x1b[92m${humanTime(roundDuration(totalTimeWorked))}\x1b[0m`);
-            console.log('🏁 [SUCCESS] Total Time Logged', `\x1b[92m${humanTime(roundDuration(totalTimeLogged))}\x1b[0m`);
-        } else {
-            console.log('🕗 Total Time Worked', `\x1b[92m${humanTime(roundDuration(totalTimeWorked))}\x1b[0m`);
-            console.log('🕗', `\x1b[92mAre you still working?!\x1b[0m`);
+            if (record) {
+                totalTimeLogged += entry.remaining;
+                console.log('🚀 [EVERHOUR]  Time logged successfully');
+            }
+        } catch (error) {
+            console.error(`❌ [EVERHOUR]  Failed to log ${entry.tag}:`, error.message);
         }
     }
-})();
+
+    if (totalTimeLogged > 0) {
+        console.log('🏁 [SUCCESS] Total Time Attempted', `\x1b[92m${humanTime(totalTimeWorked)}\x1b[0m`);
+        console.log('🏁 [SUCCESS] Total Time Logged', `\x1b[92m${humanTime(totalTimeLogged)}\x1b[0m`);
+    } else {
+        console.log('❌ [FAILED]  Time selected but nothing logged');
+        console.log('⏱️  Time Selected', `\x1b[92m${humanTime(totalTimeWorked)}\x1b[0m`);
+    }
+})().catch(handleFatal);

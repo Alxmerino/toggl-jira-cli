@@ -1,19 +1,8 @@
 import http from 'node:http';
 import {readFile} from 'node:fs/promises';
-import {readFileSync, writeFileSync} from 'node:fs';
 import {execFile} from 'node:child_process';
 import {decimalTime, roundDuration} from './utils.js';
-import {findTaskByKey, getMyTimeRecords, getTask, saveTimeRecord, searchTasks} from './everhour.js';
-
-// Toggl tags you matched by hand (e.g. OMR-Admin -> the OMR-1 task). Kept apart from the task cache, which is disposable
-const MAPPINGS_FILE = new URL('../.everhour-mappings.json', import.meta.url);
-const readMappings = () => {
-    try {
-        return JSON.parse(readFileSync(MAPPINGS_FILE, 'utf8'));
-    } catch {
-        return {};
-    }
-}
+import {getCurrentUser, getMappings, getTask, getTimeRecords, resolveTask, saveMapping, saveTimeRecord, searchTasks} from './everhour.js';
 
 const json = (res, status, data) => {
     res.writeHead(status, {'Content-Type': 'application/json'});
@@ -22,26 +11,30 @@ const json = (res, status, data) => {
 
 export async function startWeb(date, groups) {
     console.log('⏳ [EVERHOUR]', `\x1b[32mMatching ${groups.length} issues to Everhour tasks\x1b[0m`);
-    const records = await getMyTimeRecords(date);
-    const mappings = readMappings();
+    const me = await getCurrentUser();
+    const records = await getTimeRecords(me.id, date);
 
-    // ponytail: first record wins if the task already has several for this date
+    // A task can already hold several records for the day (the CLI flow tops up with new ones).
+    // The first is the one this page edits; the rest are kept and counted toward the day's total.
     const taskFields = (task) => {
-        const record = task && records.find(r => r.task?.id === task.id);
+        const [record, ...others] = task ? records.filter(r => r.task?.id === task.id) : [];
+        const otherSeconds = others.reduce((sum, r) => sum + r.time, 0);
+        const total = (record?.time ?? 0) + otherSeconds;
         return {
             taskId: task?.id,
             taskName: task?.name,
             url: task?.url,
             recordId: record?.id,
-            loggedHours: record ? decimalTime(record.time) : null,
+            otherSeconds,
+            loggedHours: total ? decimalTime(total) : null,
             recordComment: record?.comment
         };
     };
 
     // ponytail: one search per issue in parallel; Everhour allows ~20 req/10s, so batch this if a day ever has 15+ issues
     const rows = await Promise.all(groups.map(async (group) => {
-        const mapped = group.tag in mappings;
-        const task = await (mapped ? getTask(mappings[group.tag]) : findTaskByKey(group.tag)).catch(() => null);
+        const mapped = group.tag in getMappings();
+        const task = await resolveTask(group.tag).catch(() => null);
         const fields = taskFields(task);
         return {
             key: group.tag,
@@ -64,8 +57,7 @@ export async function startWeb(date, groups) {
         if (other) throw new Error(`Already assigned to ${other.key}; put the hours on that row`);
         if (row.logged) throw new Error(`Already logged to ${row.taskName}; move that entry in Everhour`);
         Object.assign(row, taskFields(await getTask(taskId)), {mapped: true, note: undefined});
-        mappings[row.key] = taskId;
-        writeFileSync(MAPPINGS_FILE, JSON.stringify(mappings, null, 2));
+        saveMapping(row.key, taskId);
         console.log('🔗 [EVERHOUR]', `\x1b[93m${row.key}\x1b[0m`, `mapped to ${row.taskName}, saved for next time`);
         return row;
     };
@@ -74,10 +66,13 @@ export async function startWeb(date, groups) {
         if (!row.taskId) throw new Error('No Everhour task for this row');
         if (!(hours > 0 && hours <= 24)) throw new Error('Hours must be between 0 and 24');
 
-        const time = Math.round(hours * 60) * 60;
-        const record = await saveTimeRecord(row.recordId, {task: row.taskId, date, time, comment});
+        // Hours on the page are the day's total for the task; this record holds whatever the others don't
+        const total = Math.round(hours * 60) * 60;
+        const time = total - row.otherSeconds;
+        if (time <= 0) throw new Error(`Other Everhour entries for this task already total ${decimalTime(row.otherSeconds)}h; edit them in Everhour`);
+        const record = await saveTimeRecord(row.recordId, {task: row.taskId, date, time, comment, user: me.id});
         row.recordId = record.id;
-        row.loggedHours = decimalTime(time);
+        row.loggedHours = decimalTime(total);
         row.comment = comment;
         row.logged = true;
         console.log('🚀 [EVERHOUR]', `\x1b[93m${row.key}\x1b[0m`, `${row.loggedHours}h logged`);

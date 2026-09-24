@@ -11,6 +11,7 @@ test('resolveDateArg uses the local day, not UTC', () => {
     assert.equal(day('yesterday'), '2026-09-23 00:00');
     assert.equal(day('2026-01-05'), '2026-01-05 00:00');
     assert.equal(day('9-7'), '2026-09-07 00:00');
-    assert.throws(() => resolveDateArg('tomorrow'), /Unrecognized date/);
+    assert.throws(() => resolveDateArg('tomorrow'), /Invalid date/);
+    assert.throws(() => resolveDateArg('2026-02-31'), /Invalid date/);
     mock.timers.reset();
 });
