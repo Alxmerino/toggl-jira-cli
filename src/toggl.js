@@ -1,4 +1,4 @@
-import {subDays, format, addDays} from "date-fns";
+import {addDays, formatISO} from "date-fns";
 import {getQueryParams, logError, resolveDateArg} from './utils.js';
 
 const {TOGGL_TOKEN} = process.env;
@@ -41,26 +41,14 @@ export const getProject = async (workspaceId, projectId) => {
 }
 
 export const getTodayEntries = async (date) => {
-    const params = {};
-    let displayDate = 'today';
-    let startDate;
+    const startDate = resolveDateArg(date);
 
-    if (date === 'today') {
-        startDate = resolveDateArg('today');
-        displayDate = 'today';
-    } else if (date === 'yesterday') {
-        startDate = resolveDateArg('yesterday');
-        displayDate = 'yesterday';
-    } else {
-        startDate = resolveDateArg(date);
-        displayDate = date;
-    }
+    // Local midnight to local midnight, with offset, so the day boundary matches the machine's timezone
+    const params = {
+        start_date: formatISO(startDate),
+        end_date: formatISO(addDays(startDate, 1))
+    };
 
-    // Use start_date and end_date to get entries for a specific day
-    // The API expects ISO date strings (YYYY-MM-DD)
-    params.start_date = format(startDate, 'yyyy-MM-dd');
-    params.end_date = format(addDays(startDate, 1), 'yyyy-MM-dd');
-
-    console.log('📝 [TOGGL]', `\x1b[32mGetting Entries for ${displayDate}\x1b[0m`)
+    console.log('📝 [TOGGL]', `\x1b[32mGetting Entries for ${date}\x1b[0m`)
     return toggleClient('/me/time_entries', {params});
 }

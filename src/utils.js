@@ -1,5 +1,4 @@
-import { UTCDate } from "@date-fns/utc";
-import {format, subDays} from "date-fns";
+import {format, subDays, startOfDay} from "date-fns";
 
 export function humanTime(seconds) {
     const levels = [
@@ -64,34 +63,18 @@ export const getQueryParams = (params) => {
         .join('&');
 }
 
+// Resolves to local midnight so "today" follows the machine's timezone, not UTC
 export function resolveDateArg(date) {
-    let resolvedDate = new UTCDate();
+    const today = startOfDay(new Date());
+    if (date === 'today') return today;
+    if (date === 'yesterday') return subDays(today, 1);
 
-    switch (date) {
-        case 'today':
-            break;
-        case 'yesterday':
-            resolvedDate = subDays(resolvedDate, 1);
-            break;
-        default:
-            const regexDateMatch = date.match(/^(\d{1,4})-(\d{1,2})-(\d{2})$/);
-            // YYYY-MM-DD
-            if (regexDateMatch) {
-                resolvedDate = new UTCDate(regexDateMatch[0]);
-            } else {
-                const year = resolvedDate.getFullYear();
-                resolvedDate = new UTCDate(year + '-' + date);
-            }
-            break
-    }
-
-    // Use UTC methods to ensure consistent midnight across timezones
-    resolvedDate.setUTCHours(0);
-    resolvedDate.setUTCMinutes(0);
-    resolvedDate.setUTCSeconds(0);
-
-
-    return resolvedDate;
+    // YYYY-MM-DD, or MM-DD for the current year. Built from parts: new Date('YYYY-MM-DD') parses as UTC
+    const parts = date.split('-').map(Number);
+    const [year, month, day] = parts.length === 3 ? parts : [today.getFullYear(), ...parts];
+    const resolved = new Date(year, month - 1, day);
+    if (isNaN(resolved)) throw new Error(`Unrecognized date "${date}": use today, yesterday, YYYY-MM-DD or MM-DD`);
+    return resolved;
 }
 
 export function humanReadableDate(date) {

@@ -4,11 +4,25 @@ import {format, subDays} from "date-fns";
 import {header, footer, humanTime, formatTime, roundDuration, resolveDateArg, humanReadableDate} from './utils.js';
 import {getTodayEntries, getProject, getWorkspaces} from './toggl.js';
 import {postIssueWorklog} from './jira.js';
+import {startWeb} from './web.js';
+import {createInterface} from 'node:readline/promises';
+import {execFile} from 'node:child_process';
 
 (async function () {
-    let logDate = process.argv.slice(2)[0];
-    if (!logDate) {
-        logDate = 'today';
+    // `log` opens the Everhour web UI after the summary; any other arg is the date
+    const args = process.argv.slice(2);
+    const openWeb = args.includes('log');
+    const [logDate = 'today'] = args.filter(arg => arg !== 'log');
+
+    if (openWeb && !process.env.EVERHOUR_TOKEN) {
+        const profileUrl = 'https://app.everhour.com/#/account/profile';
+        console.log(`🔑 \x1b[93mEVERHOUR_TOKEN is not set.\x1b[0m Opening ${profileUrl}; the API key is at the bottom of the page.`);
+        execFile('open', [profileUrl]);
+        const rl = createInterface({input: process.stdin, output: process.stdout});
+        process.env.EVERHOUR_TOKEN = (await rl.question('Paste your Everhour API key (Enter to cancel): ')).trim();
+        rl.close();
+        if (!process.env.EVERHOUR_TOKEN) process.exit(1);
+        console.log('💡 Add \x1b[32mexport EVERHOUR_TOKEN=<key>\x1b[0m to your shell profile to skip this next time.\n');
     }
 
     let totalTimeWorked = 0;
@@ -128,6 +142,14 @@ import {postIssueWorklog} from './jira.js';
     console.log(`   ─────────────────`);
     console.log(`   Total: \x1b[92m${humanTime(grandTotal)}\x1b[0m`);
     console.log(`   Tickets worked on: \x1b[92m${totalDurationByTag.length}\x1b[0m\n`);
+
+    // Everhour replaces the Jira worklog flow: hand the grouped entries to the local web UI
+    if (openWeb) {
+        return startWeb(format(resolveDateArg(logDate), 'yyyy-MM-dd'), totalDurationByTag).catch(error => {
+            console.error('🫠 \x1b[31m[EVERHOUR]\x1b[0m', error.message, '(check EVERHOUR_TOKEN)');
+            process.exit(1);
+        });
+    }
 
     // Check if JIRA integration is enabled
     const includeJira = process.env.TOGGL_USE_JIRA?.toLowerCase() === 'yes';

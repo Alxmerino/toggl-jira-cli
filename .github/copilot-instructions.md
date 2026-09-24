@@ -45,7 +45,6 @@
 | Package | Version | Purpose | Status |
 |---------|---------|---------|--------|
 | `date-fns` | ^3.6.0 | Date/time manipulation | ✅ Current |
-| `@date-fns/utc` | ^1.2.0 | UTC-aware date functions | ✅ Current |
 | `@inquirer/confirm` | ^3.1.1 | Interactive CLI confirmation prompt | ✅ Current |
 | `tty-table` | ^4.2.3 | Terminal table formatting | ✅ Current |
 
@@ -124,7 +123,7 @@ src/
 #### 4.3.3 Code Quality Observations
 
 - **No input validation:** Date parsing is regex-based with minimal error handling
-- **Timezone handling:** Uses `@date-fns/utc` but mixes UTC and local time logic inconsistently
+- **Timezone handling:** Dates resolve to local midnight (`resolveDateArg`); Toggl is queried with local-offset timestamps
 - **Magic numbers:** Hardcoded table widths (`width: 100`), color codes (`\x1b[32m`)
 - **No logging framework:** Uses `console.log` with emoji; not suitable for production logging
 - **No tests:** Zero test coverage; refactoring is risky

@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Everhour Log</title>
+    <style>
+        :root { color-scheme: light dark; }
+        body { font: 15px/1.4 system-ui, sans-serif; max-width: 1000px; margin: 2rem auto; padding: 0 1rem; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: .6rem .5rem; border-bottom: 1px solid #8884; text-align: left; vertical-align: top; }
+        input { width: 5rem; font: inherit; }
+        input[list] { width: 100%; box-sizing: border-box; margin-top: .3rem; }
+        td:first-child { width: 30%; }
+        textarea { width: 100%; box-sizing: border-box; font: inherit; resize: vertical; }
+        button { font: inherit; padding: .3rem .9rem; cursor: pointer; }
+        .task, .status { font-size: .85em; opacity: .7; }
+        .ok { color: #24be6a; opacity: 1; }
+        .err { color: #d33; opacity: 1; }
+    </style>
+</head>
+<body>
+<h1>Everhour: <span id="date"></span></h1>
+<table>
+    <thead><tr><th>Issue</th><th>Hours</th><th>Comment</th><th></th></tr></thead>
+    <tbody></tbody>
+    <tfoot><tr><th>Total</th><th id="total"></th><th></th><th><button id="all">Log all</button></th></tr></tfoot>
+</table>
+<script type="module">
+    // Keeps the CLI running while this tab is open; the server shuts down once no tab holds this connection
+    new EventSource('/alive');
+    const {date, rows} = await (await fetch('/rows')).json();
+    const tbody = document.querySelector('tbody');
+    const total = document.getElementById('total');
+    document.getElementById('date').textContent = date;
+
+    const sum = () => {
+        total.textContent = [...tbody.querySelectorAll('input[type=number]')].reduce((s, el) => s + (+el.value || 0), 0).toFixed(2);
+    };
+
+    const logRow = async (i, tr) => {
+        const [hours, comment, button, status] = ['input[type=number]', 'textarea', 'button', '.status'].map(s => tr.querySelector(s));
+        if (!hours.reportValidity()) return;
+        button.disabled = true;
+        status.className = 'status';
+        status.textContent = 'Saving…';
+        try {
+            const res = await fetch('/log', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({i, hours: +hours.value, comment: comment.value})
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error);
+            status.className = 'status ok';
+            status.textContent = `Logged ${data.loggedHours}h`;
+            button.textContent = 'Update';
+        } catch (error) {
+            status.className = 'status err';
+            status.textContent = error.message;
+        }
+        button.disabled = false;
+    };
+
+    const showTask = (row, tr) => {
+        const [link, task, button, status] = ['a', '.task', 'button', '.status'].map(s => tr.querySelector(s));
+        link.textContent = row.key;
+        if (row.url) link.href = row.url;
+        task.textContent = row.taskName ?? row.note ?? 'No Everhour task found';
+        button.disabled = !row.taskId;
+        button.textContent = row.loggedHours ? 'Update' : 'Log';
+        status.className = 'status';
+        status.textContent = row.loggedHours ? `Already logged ${row.loggedHours}h` : '';
+    };
+
+    // Unmatched rows get a search box; the datalist fills from Everhour as you type
+    const addPicker = (i, tr) => {
+        const picker = document.createElement('input');
+        const options = document.createElement('datalist');
+        picker.placeholder = rows[i].taskId ? 'Change Everhour task' : 'Search Everhour tasks';
+        picker.setAttribute('list', options.id = `tasks-${i}`);
+        tr.cells[0].append(picker, options);
+
+        let ids = {}, timer;
+        picker.oninput = () => {
+            const id = ids[picker.value];
+            if (id) return assign(id);
+            clearTimeout(timer);
+            if (picker.value.trim().length < 2) return;
+            timer = setTimeout(async () => {
+                const tasks = await (await fetch('/search?q=' + encodeURIComponent(picker.value.trim()))).json();
+                if (!Array.isArray(tasks)) return;
+                ids = Object.fromEntries(tasks.map(t => [t.label, t.id]));
+                options.replaceChildren(...tasks.map(t => new Option(t.label)));
+            }, 300);
+        };
+
+        const assign = async (taskId) => {
+            const status = tr.querySelector('.status');
+            const res = await fetch('/task', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({i, taskId})
+            });
+            const data = await res.json();
+            if (!res.ok) {
+                status.className = 'status err';
+                status.textContent = data.error;
+                return;
+            }
+            rows[i] = data;
+            showTask(data, tr);
+            picker.value = '';
+            // Keep what was typed; only prefill from Everhour when the comment is empty
+            const comment = tr.querySelector('textarea');
+            if (!comment.value && data.recordComment) comment.value = data.recordComment;
+        };
+    };
+
+    rows.forEach((row, i) => {
+        const tr = tbody.insertRow();
+        tr.innerHTML = `
+            <td><a target="_blank"></a><div class="task"></div></td>
+            <td><input type="number" step="any" min="0.01" max="24" required></td>
+            <td><textarea rows="2"></textarea></td>
+            <td><button>Log</button><div class="status"></div></td>`;
+        const [hours, comment, button] = ['input[type=number]', 'textarea', 'button'].map(s => tr.querySelector(s));
+        hours.value = row.hours;
+        hours.oninput = sum;
+        comment.value = row.comment;
+        button.onclick = () => logRow(i, tr);
+        showTask(row, tr);
+        // Mapped rows keep the picker so a wrong mapping can be changed
+        if (!row.taskId || row.mapped) addPicker(i, tr);
+    });
+
+    if (!rows.length) tbody.insertRow().insertCell().textContent = 'No billable tagged Toggl entries for this date.';
+    sum();
+
+    document.getElementById('all').onclick = async () => {
+        for (const [i, tr] of [...tbody.rows].entries()) {
+            if (rows[i]?.taskId) await logRow(i, tr);
+        }
+    };
+</script>
+</body>
+</html>
