@@ -3,8 +3,11 @@ import confirm from '@inquirer/confirm';
 import checkbox from '@inquirer/checkbox';
 import Table from 'tty-table';
 import {header, footer, humanTime, toApiDate, roundDuration, resolveDateArg, humanReadableDate} from './utils.js';
-import {getTodayEntries} from './toggl.js';
+import {getTodayEntries, getProject, getWorkspaces} from './toggl.js';
 import {postTime, getCurrentUser, getLoggedSecondsByTask, resolveTask} from './everhour.js';
+import {startWeb} from './web.js';
+import {createInterface} from 'node:readline/promises';
+import {execFile} from 'node:child_process';
 
 // Ctrl+C at a prompt should read as "cancelled", not as a stack trace.
 const handleFatal = (error) => {
@@ -18,28 +21,49 @@ const handleFatal = (error) => {
 };
 
 (async function () {
-    let logDate = process.argv.slice(2)[0];
-    if (!logDate) {
-        const logToday = await confirm({message: 'Log today\'s time?'});
-        if (!logToday) {
-            const logYesterday = await confirm({message: 'Log yesterday\'s time?'});
-            if (!logYesterday) {
-                return;
-            }
-            logDate = 'yesterday';
-        } else {
-            logDate = 'today';
-        }
+    // `toggl [date]` only reports. `toggl log [date]` pushes to Everhour: the web page by default, the checkbox flow with --cli
+    const args = process.argv.slice(2);
+    const push = args.includes('log');
+    const openWeb = push && !args.includes('--cli');
+    const logDate = args.find(arg => arg !== 'log' && !arg.startsWith('--')) ?? 'today';
+
+    if (!process.env.EVERHOUR_API_KEY) {
+        const profileUrl = 'https://app.everhour.com/#/account/profile';
+        console.log(`🔑 \x1b[93mEVERHOUR_API_KEY is not set.\x1b[0m Opening ${profileUrl}; the API key is at the bottom of the page.`);
+        execFile('open', [profileUrl]);
+        const rl = createInterface({input: process.stdin, output: process.stdout});
+        process.env.EVERHOUR_API_KEY = (await rl.question('Paste your Everhour API key (Enter to cancel): ')).trim();
+        rl.close();
+        if (!process.env.EVERHOUR_API_KEY) process.exit(1);
+        console.log('💡 Add \x1b[32mexport EVERHOUR_API_KEY=<key>\x1b[0m to your shell profile to skip this next time.\n');
     }
 
     let totalTimeWorked = 0;
     let totalTimeLogged = 0;
     const logDay = resolveDateArg(logDate);
     const resolvedDate = humanReadableDate(logDay);
-    console.log(`Logging time entries for \x1b[32m${resolvedDate}\x1b[0m`);
+    console.log(`${push ? 'Logging time entries' : 'Time entries'} for \x1b[32m${resolvedDate}\x1b[0m`);
 
     let entries = await getTodayEntries(logDate);
     entries = Array.isArray(entries) ? entries : [];
+
+    // Optional per-person filter, e.g. TOGGL_PROJECTS=Billable when non-billable time is tracked in Toggl too
+    const onlyProjects = (process.env.TOGGL_PROJECTS || '').split(',').map(name => name.trim()).filter(Boolean);
+    if (onlyProjects.length > 0) {
+        const [workspace] = await getWorkspaces();
+        const projectIds = [...new Set(entries.map(entry => entry.project_id).filter(Boolean))];
+        // Sequential, as before: Toggl rate-limits bursts
+        const projects = [];
+        for (const id of projectIds) {
+            projects.push(await getProject(workspace.id, id));
+        }
+        const keep = new Set(projects.filter(p => p && onlyProjects.includes(p.name)).map(p => p.id));
+        const skipped = entries.filter(entry => !keep.has(entry.project_id)).length;
+        entries = entries.filter(entry => keep.has(entry.project_id));
+        if (skipped > 0) {
+            console.log(`ℹ️  [INFO]  ${skipped} entr${skipped === 1 ? 'y' : 'ies'} outside ${onlyProjects.join(', ')} left out`);
+        }
+    }
 
     const groupedEntries = entries.reduce((acc, obj) => {
         const key = obj.tags && obj.tags.length > 0 ? obj.tags[0] : 'no-tags';
@@ -56,12 +80,8 @@ const handleFatal = (error) => {
     const totalDurationByTag = Object.entries(groupedEntries).map(([tag, tagEntries]) => {
         const totalDuration = tagEntries.reduce((sum, entry) => sum + entry.duration, 0);
         const descriptions = [...new Set(tagEntries.map(e => e.description).filter(Boolean))];
-        const earliestStart = tagEntries.reduce((earliest, current) => {
-            return current.start < earliest.start ? current : earliest;
-        }).start;
         return {
             tag,
-            started: earliestStart,
             duration: totalDuration,
             description: descriptions.join(', ') || 'No description',
             entries: tagEntries.map(entry => ({
@@ -96,11 +116,20 @@ const handleFatal = (error) => {
     }
 
     for (const tag of unresolved) {
-        console.log('❓ [SKIP]  ', `\x1b[33m${tag} has no matching Everhour task\x1b[0m`);
+        console.log(push ? '❓ [SKIP]  ' : '❓ [NO TASK]', `\x1b[33m${tag} has no matching Everhour task${openWeb ? '; pick one on the page' : ''}\x1b[0m`);
     }
 
     const timeEntriesTable = Table(header, totalDurationByTag, footer, {width: 120, compact: true}).render();
     console.log(timeEntriesTable);
+    console.log(`   Tickets worked on: \x1b[92m${totalDurationByTag.length}\x1b[0m\n`);
+
+    if (!push) {
+        return;
+    }
+
+    if (openWeb) {
+        return startWeb(apiDate, totalDurationByTag);
+    }
 
     const loggable = totalDurationByTag.filter(entry => entry.taskId && entry.remaining > 0);
     const settled = totalDurationByTag.filter(entry => entry.taskId && entry.remaining === 0);

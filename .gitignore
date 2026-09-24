@@ -1,6 +1,8 @@
 # Dot files
 .idea
 .env
+.everhour-tasks.json
+.everhour-mappings.json
 
 # Directories
 node_modules

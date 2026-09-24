@@ -17,6 +17,11 @@ export function humanTime(seconds) {
     return returnText.trim();
 }
 
+export function decimalTime(seconds) {
+    const hours = seconds / 3600;
+    return hours.toFixed(2);
+}
+
 // Everhour dates a time record by calendar day: 2026-09-02
 export function toApiDate(date) {
     return format(date, 'yyyy-MM-dd');
@@ -54,37 +59,21 @@ export const getQueryParams = (params) => {
         .join('&');
 }
 
+// Resolves to local midnight so "today" follows the machine's timezone, not UTC
 export function resolveDateArg(date) {
-    let resolvedDate = new Date();
+    const today = startOfDay(new Date());
+    if (date === 'today') return today;
+    if (date === 'yesterday') return subDays(today, 1);
 
-    switch (date) {
-        case 'today':
-            break;
-        case 'yesterday':
-            resolvedDate = subDays(resolvedDate, 1);
-            break;
-        default:
-            const regexDateMatch = date.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-            if (regexDateMatch) {
-                const m = parseInt(regexDateMatch[2], 10);
-                const d = parseInt(regexDateMatch[3], 10);
-                if (m < 1 || m > 12 || d < 1 || d > 31) {
-                    throw new Error(`Invalid date: ${date}`);
-                }
-                resolvedDate = parseISO(regexDateMatch[0]);
-            } else {
-                const year = resolvedDate.getFullYear();
-                resolvedDate = parseISO(year + '-' + date);
-            }
-            break
+    // YYYY-MM-DD, or MM-DD for the current year. Built from parts: new Date('YYYY-MM-DD') parses as UTC
+    const parts = date.split('-').map(Number);
+    const [year, month, day] = parts.length === 3 ? parts : [today.getFullYear(), ...parts];
+    const resolved = new Date(year, month - 1, day);
+    // The Date constructor rolls 02-31 over into March; reject instead
+    if (isNaN(resolved) || resolved.getMonth() !== month - 1 || resolved.getDate() !== day) {
+        throw new Error(`Invalid date "${date}": use today, yesterday, YYYY-MM-DD or MM-DD`);
     }
-
-    if (isNaN(resolvedDate.getTime())) {
-        throw new Error(`Invalid date: ${date}`);
-    }
-
-    // Days are the user's local calendar days, not UTC days.
-    return startOfDay(resolvedDate);
+    return resolved;
 }
 
 // Local-day window as offset-aware RFC3339, so Toggl slices on the same day the user sees.
@@ -106,14 +95,6 @@ export function humanReadableDate(date) {
 }
 
 export const header = [
-    // {
-    //     value: 'project_name',
-    //     alias: 'Project',
-    //     headerColor: 'cyan',
-    //     color: 'white',
-    //     align: 'left',
-    //     width: '15%'
-    // },
     {
         value: 'tag',
         alias: 'Issue',
@@ -123,23 +104,14 @@ export const header = [
         width: '13%'
     },
     {
-        value: 'started',
-        alias: 'Started',
-        headerColor: 'cyan',
-        color: 'white',
+        value: 'duration',
+        alias: 'Decimal',
         align: 'left',
-        width: '16%',
+        color: 'yellow',
+        width: '10%',
         formatter: function (value) {
-            return format(parseISO(value), 'MMM d, h:mm a');
+            return decimalTime(roundDuration(value));
         }
-    },
-    {
-        value: 'description',
-        align: 'left',
-        alias: 'Description',
-        width: '39%',
-        headerColor: 'white',
-        color: 'white',
     },
     {
         value: 'duration',
@@ -150,6 +122,14 @@ export const header = [
         formatter: function (value) {
             return humanTime(roundDuration(value));
         }
+    },
+    {
+        value: 'description',
+        align: 'left',
+        alias: 'Description',
+        width: '43%',
+        headerColor: 'white',
+        color: 'white',
     },
     {
         value: 'alreadyLogged',
@@ -163,17 +143,17 @@ export const header = [
     }
 ]
 
-export const footer = [
-    'Total',
-    '',
-    '',
-    // Column 3 is "Time Worked"; the trailing '' keeps "In Everhour" blank.
-    function (cellValue, columnIndex, rowIndex, rowData) {
-        const total = rowData.reduce((prev, curr) => {
-            return prev + curr[3]
-        }, 0)
+// Columns 1 and 2 are Decimal and Time Worked (both raw durations); the trailing '' entries keep Description and In Everhour blank
+const totalDuration = (rowData, column) => rowData.reduce((sum, row) => sum + row[column], 0);
 
-        return this.style(`${humanTime(roundDuration(total))}`, "italic")
+export const footer = [
+    'Total:',
+    function (cellValue, columnIndex, rowIndex, rowData) {
+        return this.style(`${decimalTime(roundDuration(totalDuration(rowData, 1)))}`, "italic")
     },
+    function (cellValue, columnIndex, rowIndex, rowData) {
+        return this.style(`${humanTime(roundDuration(totalDuration(rowData, 2)))}`, "italic")
+    },
+    '',
     ''
 ]
